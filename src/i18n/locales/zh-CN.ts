@@ -619,6 +619,7 @@ export default {
     saveSource: "保存",
     cancelEdit: "取消",
     sourceSaved: "源码已保存",
+    sourceSaveFailed: "保存源码失败：{message}",
     schemaColumn: "Schema",
     comment: "注释",
     loadingSchemas: "加载 Schema...",

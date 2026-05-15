@@ -63,6 +63,7 @@ const activeConnectionValue = computed(() => props.activeConnection?.id || "");
 const activeSchemaValue = computed(() => props.activeTab.schema || "");
 const isSingleDb = computed(() => isSingleDatabase(props.activeConnection?.db_type));
 const schemaDatabaseKey = computed(() => props.activeTab.database || (isSingleDb.value ? "_" : ""));
+const saveTooltip = computed(() => (props.activeTab.objectSource ? t("objects.saveSource") : t("toolbar.saveSql")));
 
 const showSchemaSelector = computed(() => {
   const connection = props.activeConnection;
@@ -178,7 +179,7 @@ function databaseDisplayName(database: string): string {
             <Save class="h-3.5 w-3.5" />
           </Button>
         </TooltipTrigger>
-        <TooltipContent>{{ t("toolbar.saveSql") }}</TooltipContent>
+        <TooltipContent>{{ saveTooltip }}</TooltipContent>
       </Tooltip>
       <Tooltip>
         <TooltipTrigger as-child>

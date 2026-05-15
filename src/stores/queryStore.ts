@@ -52,6 +52,7 @@ export const useQueryStore = defineStore("query", () => {
       pinned: t.pinned,
       mode: t.mode,
       objectBrowser: t.objectBrowser,
+      objectSource: t.objectSource,
       tableMeta: t.tableMeta,
     })),
   );
@@ -251,6 +252,11 @@ export const useQueryStore = defineStore("query", () => {
   function setTableMeta(id: string, meta: NonNullable<QueryTab["tableMeta"]>) {
     const tab = tabs.value.find((t) => t.id === id);
     if (tab) tab.tableMeta = meta;
+  }
+
+  function setObjectSource(id: string, objectSource: NonNullable<QueryTab["objectSource"]>) {
+    const tab = tabs.value.find((t) => t.id === id);
+    if (tab) tab.objectSource = objectSource;
   }
 
   function setExecuting(id: string, isExecuting: boolean) {
@@ -600,6 +606,7 @@ export const useQueryStore = defineStore("query", () => {
     updateSchema,
     updateConnection,
     setTableMeta,
+    setObjectSource,
     setExecuting,
     setErrorResult,
     setActiveResultIndex,

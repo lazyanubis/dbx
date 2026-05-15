@@ -590,6 +590,11 @@ function viewObjectSource() {
     .then((result) => {
       const tabId = queryStore.createTab(node.connectionId!, node.database!, node.label);
       queryStore.updateSql(tabId, result.source);
+      queryStore.setObjectSource(tabId, {
+        schema,
+        name: node.label,
+        objectType: objectType as "PROCEDURE" | "FUNCTION",
+      });
     })
     .catch((e: any) => {
       toast(e?.message || String(e), 5000);

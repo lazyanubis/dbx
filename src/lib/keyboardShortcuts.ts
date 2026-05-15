@@ -33,6 +33,12 @@ export function isSaveShortcut(event: ShortcutLikeEvent): boolean {
   return event.key.toLowerCase() === "s";
 }
 
+export function isObjectSourceSaveShortcutTarget(
+  target: { closest(selector: string): unknown } | null | undefined,
+): boolean {
+  return !!target?.closest("[data-object-source-editor], [data-object-source-preview]");
+}
+
 export function isCancelSearchShortcut(event: ShortcutLikeEvent): boolean {
   if (event.isComposing) return false;
   return event.key === "Escape";

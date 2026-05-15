@@ -35,9 +35,29 @@ test("serializes unsaved query tabs with editor context", () => {
       pinned: true,
       mode: "query",
       objectBrowser: undefined,
+      objectSource: undefined,
       tableMeta: undefined,
     },
   ]);
+});
+
+test("serializes object source query tabs with save context", () => {
+  const saved = serializeOpenTabs([
+    queryTab({
+      title: "fn_add",
+      objectSource: {
+        schema: "public",
+        name: "fn_add",
+        objectType: "FUNCTION",
+      },
+    }),
+  ]);
+
+  assert.deepEqual(saved[0]?.objectSource, {
+    schema: "public",
+    name: "fn_add",
+    objectType: "FUNCTION",
+  });
 });
 
 test("restores unsaved query tabs and active tab after restart", () => {
@@ -56,6 +76,26 @@ test("restores unsaved query tabs and active tab after restart", () => {
     ],
   );
   assert.equal(restored.activeTabId, "tab-2");
+});
+
+test("restores object source save context", () => {
+  const raw = JSON.stringify([
+    queryTab({
+      objectSource: {
+        schema: "public",
+        name: "fn_add",
+        objectType: "FUNCTION",
+      },
+    }),
+  ]);
+
+  const restored = restoreOpenTabsState(raw, "tab-1");
+
+  assert.deepEqual(restored.tabs[0]?.objectSource, {
+    schema: "public",
+    name: "fn_add",
+    objectType: "FUNCTION",
+  });
 });
 
 test("desktop restore keeps legacy query tabs without a mode", () => {

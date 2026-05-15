@@ -634,6 +634,7 @@ export default {
     saveSource: "Save",
     cancelEdit: "Cancel",
     sourceSaved: "Source saved",
+    sourceSaveFailed: "Failed to save source: {message}",
     schemaColumn: "Schema",
     comment: "Comment",
     loadingSchemas: "Loading schemas...",

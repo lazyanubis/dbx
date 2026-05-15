@@ -39,6 +39,6 @@ export function buildExecutableObjectSourceSql(input: BuildEditableObjectSourceS
   return ensureSemicolon(source);
 }
 
-export function objectSourceSaveExecutionMode(databaseType: DatabaseType): ObjectSourceSaveExecutionMode {
-  return databaseType === "sqlserver" ? "single" : "script";
+export function objectSourceSaveExecutionMode(_databaseType: DatabaseType): ObjectSourceSaveExecutionMode {
+  return "single";
 }

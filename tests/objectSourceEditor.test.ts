@@ -30,6 +30,19 @@ test("SQL Server object source saves as a single batch", () => {
   assert.equal(objectSourceSaveExecutionMode("sqlserver"), "single");
 });
 
+test("Kingbase object source saves as a single statement", () => {
+  assert.equal(objectSourceSaveExecutionMode("kingbase"), "single");
+});
+
+test("Postgres-family object source saves as a single statement", () => {
+  assert.equal(objectSourceSaveExecutionMode("postgres"), "single");
+  assert.equal(objectSourceSaveExecutionMode("gaussdb"), "single");
+});
+
+test("MySQL object source saves as a single statement", () => {
+  assert.equal(objectSourceSaveExecutionMode("mysql"), "single");
+});
+
 test("Postgres view body opens as CREATE OR REPLACE VIEW", () => {
   const sql = buildExecutableObjectSourceSql({
     databaseType: "postgres",

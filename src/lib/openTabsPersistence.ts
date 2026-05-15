@@ -11,6 +11,7 @@ export interface SavedOpenTab {
   pinned?: boolean;
   mode?: QueryTab["mode"];
   objectBrowser?: QueryTab["objectBrowser"];
+  objectSource?: QueryTab["objectSource"];
   tableMeta?: QueryTab["tableMeta"];
 }
 
@@ -31,6 +32,7 @@ export function serializeOpenTabs(tabs: QueryTab[]): SavedOpenTab[] {
     pinned: tab.pinned,
     mode: tab.mode,
     objectBrowser: tab.objectBrowser,
+    objectSource: tab.objectSource,
     tableMeta: tab.tableMeta,
   }));
 }

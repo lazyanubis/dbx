@@ -5,6 +5,7 @@ import {
   isCloseTabShortcut,
   isExecuteSqlShortcut,
   isFocusSearchShortcut,
+  isObjectSourceSaveShortcutTarget,
   isSaveShortcut,
 } from "../src/lib/keyboardShortcuts.ts";
 
@@ -62,6 +63,23 @@ test("ignores save shortcut while composing", () => {
 
 test("ignores Alt+S for saving", () => {
   assert.equal(isSaveShortcut({ key: "s", altKey: true }), false);
+});
+
+test("detects object source editor targets for contextual save", () => {
+  const target = {
+    closest: (selector: string) =>
+      selector === "[data-object-source-editor], [data-object-source-preview]" ? {} : null,
+  };
+
+  assert.equal(isObjectSourceSaveShortcutTarget(target), true);
+});
+
+test("ignores regular editor targets for contextual object source save", () => {
+  const target = {
+    closest: () => null,
+  };
+
+  assert.equal(isObjectSourceSaveShortcutTarget(target), false);
 });
 
 test("matches Escape for cancelling search", () => {

@@ -268,6 +268,11 @@ export interface QueryTab {
     schema?: string;
     objectType?: "tables";
   };
+  objectSource?: {
+    schema?: string;
+    name: string;
+    objectType: ObjectSourceKind;
+  };
   tableMeta?: {
     schema?: string;
     tableName: string;

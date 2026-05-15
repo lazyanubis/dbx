@@ -33,12 +33,14 @@ import "@/i18n";
 import { translateBackendError } from "@/i18n/backend-errors";
 import * as api from "@/lib/api";
 import { resolveDefaultDatabase } from "@/lib/defaultDatabase";
+import { buildExecutableObjectSourceSql, objectSourceSaveExecutionMode } from "@/lib/objectSourceEditor";
 import { resolveExecutableSql } from "@/lib/sqlExecutionTarget";
 import { isTauriRuntime } from "@/lib/tauriRuntime";
 import {
   isCloseTabShortcut,
   isExecuteSqlShortcut,
   isFocusSearchShortcut,
+  isObjectSourceSaveShortcutTarget,
   isSaveShortcut,
 } from "@/lib/keyboardShortcuts";
 import { isPreviewTab } from "@/lib/tabPresentation";
@@ -203,6 +205,10 @@ function defaultSavedSqlName(title: string) {
 async function openSaveSqlDialog() {
   const tab = activeTab.value;
   if (!tab || !tab.sql.trim()) return;
+  if (tab.objectSource) {
+    await saveActiveObjectSource(tab);
+    return;
+  }
   const existing = tab.savedSqlId ? savedSqlStore.getFile(tab.savedSqlId) : undefined;
   if (existing) {
     const updated = await savedSqlStore.saveFile({
@@ -223,6 +229,30 @@ async function openSaveSqlDialog() {
   saveSqlName.value = defaultSavedSqlName(tab.title);
   saveSqlFolderId.value = ROOT_SAVED_SQL_FOLDER;
   showSaveSqlDialog.value = true;
+}
+
+async function saveActiveObjectSource(tab: NonNullable<typeof activeTab.value>) {
+  const connection = connectionStore.getConfig(tab.connectionId);
+  const source = tab.objectSource;
+  if (!connection || !source) return;
+
+  try {
+    const sql = buildExecutableObjectSourceSql({
+      databaseType: connection.db_type,
+      objectType: source.objectType,
+      schema: source.schema || tab.schema || tab.database,
+      name: source.name,
+      source: tab.sql,
+    });
+    if (objectSourceSaveExecutionMode(connection.db_type) === "single") {
+      await api.executeQuery(tab.connectionId, tab.database, sql, source.schema || tab.schema);
+    } else {
+      await api.executeScript(tab.connectionId, tab.database, sql, source.schema || tab.schema);
+    }
+    toast(t("objects.sourceSaved"), 2000);
+  } catch (e: any) {
+    toast(t("objects.sourceSaveFailed", { message: e?.message || String(e) }), 5000);
+  }
 }
 
 async function confirmSaveSqlToLibrary() {
@@ -435,6 +465,9 @@ function handleKeydown(e: KeyboardEvent) {
     } else if (queryStore.activeTabId) {
       queryStore.closeTab(queryStore.activeTabId);
     }
+    return;
+  }
+  if (isSaveShortcut(e) && e.target instanceof Element && isObjectSourceSaveShortcutTarget(e.target)) {
     return;
   }
   if (activeTab.value?.mode === "query" && !showSaveSqlDialog.value && isSaveShortcut(e)) {

@@ -635,6 +635,7 @@ export default {
     saveSource: "Guardar",
     cancelEdit: "Cancelar",
     sourceSaved: "Código fuente guardado",
+    sourceSaveFailed: "Error al guardar el código fuente: {message}",
     schemaColumn: "Esquema",
     comment: "Comentario",
     loadingSchemas: "Cargando esquemas...",
