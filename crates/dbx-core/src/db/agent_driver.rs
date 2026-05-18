@@ -59,20 +59,7 @@ impl AgentDriverClient {
     /// Blocks (async) until the agent writes `{"ready":true}` to stdout.
     pub async fn spawn(java_path: &str, jar_path: &str) -> Result<Self, String> {
         let mut command = Command::new(java_path);
-        command
-            .args([
-                "-Dfile.encoding=UTF-8",
-                "-Dsun.stdout.encoding=UTF-8",
-                "-Dsun.stderr.encoding=UTF-8",
-                "-Doracle.net.disableOob=true",
-                "-XX:TieredStopAtLevel=1",
-                "-XX:+UseSerialGC",
-                "-jar",
-                jar_path,
-            ])
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped());
+        command.args(agent_java_args(jar_path)).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped());
 
         #[cfg(windows)]
         {
@@ -237,6 +224,23 @@ impl AgentDriverClient {
     }
 }
 
+fn agent_java_args(jar_path: &str) -> Vec<String> {
+    [
+        "-Dfile.encoding=UTF-8",
+        "-Dsun.stdout.encoding=UTF-8",
+        "-Dsun.stderr.encoding=UTF-8",
+        "-Doracle.net.disableOob=true",
+        "-Doracle.jdbc.javaNetNio=false",
+        "-XX:TieredStopAtLevel=1",
+        "-XX:+UseSerialGC",
+        "-jar",
+        jar_path,
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
+}
+
 fn read_agent_line<R: BufRead>(reader: &mut R, context: &str) -> Result<String, String> {
     let mut bytes = Vec::new();
     reader.read_until(b'\n', &mut bytes).map_err(|e| format!("Failed to read {context} from agent: {e}"))?;
@@ -312,8 +316,16 @@ impl Drop for AgentDriverClient {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_agent_process_error, read_agent_line, StderrTail};
+    use super::{agent_java_args, format_agent_process_error, read_agent_line, StderrTail};
     use std::io::Cursor;
+
+    #[test]
+    fn agent_java_args_include_oracle_network_compatibility_flags() {
+        let args = agent_java_args("/tmp/dbx-agent-oracle.jar");
+
+        assert!(args.iter().any(|arg| arg == "-Doracle.net.disableOob=true"));
+        assert!(args.iter().any(|arg| arg == "-Doracle.jdbc.javaNetNio=false"));
+    }
 
     #[test]
     fn decodes_non_utf8_agent_lines_lossily() {
