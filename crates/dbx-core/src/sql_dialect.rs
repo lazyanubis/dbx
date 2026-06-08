@@ -728,6 +728,31 @@ mod tests {
     }
 
     #[test]
+    fn builds_iris_table_data_sql_with_literal_top_and_quoted_object() {
+        let sql = build_table_data_select_sql(TableDataSelectSqlOptions {
+            database_type: Some(DatabaseType::Iris),
+            schema: Some("Ens".to_string()),
+            table_name: "AlarmResponse".to_string(),
+            primary_keys: vec!["ID".to_string()],
+            columns: vec!["ID".to_string(), "Status".to_string()],
+            fallback_order_columns: Vec::new(),
+            order_by: Some("\"Status\" DESC".to_string()),
+            limit: Some(25),
+            offset: None,
+            where_input: Some("WHERE \"Status\" = 'Open'".to_string()),
+            include_row_id: false,
+        });
+
+        assert_eq!(
+            sql,
+            "SELECT TOP 25 * FROM \"Ens\".\"AlarmResponse\" WHERE (\"Status\" = 'Open') ORDER BY \"Status\" DESC"
+        );
+        assert!(!sql.contains("?"));
+        assert!(!sql.contains(":%qpar"));
+        assert!(!sql.contains(" LIMIT "));
+    }
+
+    #[test]
     fn builds_table_data_special_column_queries() {
         assert_eq!(
             build_table_data_select_sql(TableDataSelectSqlOptions {
