@@ -123,6 +123,8 @@ const emit = defineEmits<{
 const editorRef = ref<HTMLDivElement>();
 const view = shallowRef<EditorViewType | null>(null);
 let viewportEmitFrame: number | null = null;
+let viewportRestoreFrame: number | null = null;
+let latestViewport: { scrollTop: number; scrollLeft: number } | undefined = props.initialViewport;
 const connectionStore = useConnectionStore();
 const settingsStore = useSettingsStore();
 const { isDark } = useTheme();
@@ -2092,7 +2094,7 @@ watch(
 );
 
 function pauseQueryEditorBackgroundWork() {
-  if (view.value) emitEditorViewport(view.value);
+  flushEditorViewport();
   editorIsActive = false;
   semanticDiagnosticRunId++;
   if (semanticDiagnosticTimer) clearTimeout(semanticDiagnosticTimer);
@@ -2118,35 +2120,72 @@ onBeforeUnmount(() => {
     cancelAnimationFrame(viewportEmitFrame);
     viewportEmitFrame = null;
   }
+  if (viewportRestoreFrame !== null) {
+    cancelAnimationFrame(viewportRestoreFrame);
+    viewportRestoreFrame = null;
+  }
   view.value?.scrollDOM.removeEventListener("scroll", scheduleEditorViewportEmit);
   zoomCommitScheduler.dispose();
   view.value?.destroy();
 });
 
-function emitEditorViewport(currentView: EditorViewType) {
-  emit("viewportChange", {
-    scrollTop: currentView.scrollDOM.scrollTop,
-    scrollLeft: currentView.scrollDOM.scrollLeft,
-  });
+function readEditorViewport(currentView: EditorViewType) {
+  return {
+    scrollTop: Math.max(0, currentView.scrollDOM.scrollTop),
+    scrollLeft: Math.max(0, currentView.scrollDOM.scrollLeft),
+  };
+}
+
+function emitEditorViewport(viewport: { scrollTop: number; scrollLeft: number }) {
+  emit("viewportChange", viewport);
 }
 
 function scheduleEditorViewportEmit() {
+  if (!view.value) return;
+  latestViewport = readEditorViewport(view.value);
   if (viewportEmitFrame !== null) return;
   viewportEmitFrame = requestAnimationFrame(() => {
     viewportEmitFrame = null;
-    if (view.value) emitEditorViewport(view.value);
+    if (latestViewport) emitEditorViewport(latestViewport);
   });
 }
 
+function flushEditorViewport() {
+  if (viewportEmitFrame !== null) {
+    cancelAnimationFrame(viewportEmitFrame);
+    viewportEmitFrame = null;
+  }
+  if (latestViewport) emitEditorViewport(latestViewport);
+}
+
 function restoreEditorViewport() {
-  const viewport = props.initialViewport;
+  const viewport = props.initialViewport ?? latestViewport;
   if (!view.value || !viewport) return;
-  requestAnimationFrame(() => {
+  const restoreScroll = () => {
     if (!view.value) return;
     view.value.scrollDOM.scrollTo({
       top: viewport.scrollTop,
       left: viewport.scrollLeft,
     });
+    view.value.scrollDOM.scrollTop = viewport.scrollTop;
+    view.value.scrollDOM.scrollLeft = viewport.scrollLeft;
+  };
+
+  if (viewportRestoreFrame !== null) cancelAnimationFrame(viewportRestoreFrame);
+  restoreScroll();
+  nextTick(() => {
+    restoreScroll();
+    let attempts = 0;
+    const restoreNextFrame = () => {
+      restoreScroll();
+      attempts += 1;
+      if (attempts >= 8) {
+        viewportRestoreFrame = null;
+        return;
+      }
+      viewportRestoreFrame = requestAnimationFrame(restoreNextFrame);
+    };
+    viewportRestoreFrame = requestAnimationFrame(restoreNextFrame);
   });
 }
 
