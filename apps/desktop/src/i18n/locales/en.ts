@@ -351,6 +351,7 @@
     selectSchema: "Select schema",
     setDefaultDatabase: "Set Default",
     defaultDatabase: "Default",
+    clearDatabase: "Clear database",
     completion: {
       nullValue: "NULL value",
       isNull: "Check if NULL",

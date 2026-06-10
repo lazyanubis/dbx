@@ -352,6 +352,7 @@
     selectSchema: "选择模式",
     setDefaultDatabase: "设为默认",
     defaultDatabase: "默认库",
+    clearDatabase: "清除数据库选择",
     completion: {
       nullValue: "空值",
       isNull: "判断是否为 NULL",
