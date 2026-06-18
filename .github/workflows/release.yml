@@ -338,8 +338,8 @@ jobs:
           chmod +x mpgrm
 
           ./mpgrm releases sync \
-            --repo "https://github.com/${GITHUB_REPOSITORY}.git" \
-            --target-repo "https://cnb.cool/${CNB_REPOSITORY}.git" \
+            --repo "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
+            --target-repo "https://cnb:${CNB_TOKEN}@cnb.cool/${CNB_REPOSITORY}.git" \
             --tags "${TAG_NAME}"
 
   docker:
