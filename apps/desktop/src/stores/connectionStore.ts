@@ -1656,7 +1656,7 @@ export const useConnectionStore = defineStore("connection", () => {
 
     const config = getConfig(connectionId);
     const metadataCapabilities = getTableMetadataCapabilities(effectiveDatabaseTypeForConnection(config));
-    if (node.type === "table" && !parseSqlServerLinkedSchema(schema)) {
+    if ((node.type === "table" || node.type === "mongo-collection") && !parseSqlServerLinkedSchema(schema)) {
       if (metadataCapabilities.indexes) {
         children.push({
           id: `${parentId}:__indexes`,
@@ -1670,6 +1670,8 @@ export const useConnectionStore = defineStore("connection", () => {
           children: [],
         });
       }
+    }
+    if (node.type === "table" && !parseSqlServerLinkedSchema(schema)) {
       if (metadataCapabilities.foreignKeys) {
         children.push({
           id: `${parentId}:__fkeys`,
@@ -1709,6 +1711,33 @@ export const useConnectionStore = defineStore("connection", () => {
 
     node.isLoading = true;
     try {
+      if (effectiveDatabaseTypeForConnection(getConfig(connectionId)) === "mongodb") {
+        const fields = await listMongoCompletionFields(connectionId, database, table);
+        setChildren(
+          node,
+          fields.map((field) => {
+            const column = {
+              name: field.name,
+              data_type: field.type || "unknown",
+              is_nullable: true,
+              column_default: null,
+              is_primary_key: field.name === "_id",
+              extra: "sampled",
+            };
+            return {
+              id: `${parentId}:${field.name}`,
+              label: `${field.name} (${column.data_type})`,
+              type: "column" as const,
+              connectionId,
+              database,
+              tableName: table,
+              meta: column,
+            };
+          }),
+        );
+        node.isExpanded = true;
+        return;
+      }
       const querySchema = metadataQuerySchema(connectionId, database, schema);
       const columns = await api.getColumns(connectionId, database, querySchema, table);
       setChildren(
@@ -1876,6 +1905,8 @@ export const useConnectionStore = defineStore("connection", () => {
       }
     } else if (node.type === "mongo-db" && node.connectionId && node.database) {
       await loadMongoCollections(node.connectionId, node.database);
+    } else if (node.type === "mongo-collection" && node.connectionId && node.database) {
+      await loadTableGroups(node.connectionId, node.database, node.label, node.schema, node.id);
     } else if (node.type === "database" && node.connectionId && hasTreeNodeDatabaseContext(node)) {
       const config = getConfig(node.connectionId);
       const effectiveDbType = effectiveDatabaseTypeForConnection(config);

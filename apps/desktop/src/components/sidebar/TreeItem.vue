@@ -481,9 +481,7 @@ async function toggle() {
     } else if (node.type === "mongo-db" && node.connectionId && node.database) {
       await connectionStore.loadMongoCollections(node.connectionId, node.database);
     } else if (node.type === "mongo-collection" && node.connectionId && node.database) {
-      const tabTitle = `${node.database}.${node.label}`;
-      const tab = queryStore.createTab(node.connectionId, node.database, tabTitle, "mongo");
-      queryStore.updateSql(tab, node.label);
+      await connectionStore.loadTableGroups(node.connectionId, node.database, node.label, node.schema, node.id);
     } else if (node.type === "elasticsearch-index" && node.connectionId) {
       const tab = queryStore.createTab(node.connectionId, node.database || "default", node.label, "mongo");
       queryStore.updateSql(tab, node.label);
@@ -547,6 +545,8 @@ function runRowClickAction() {
   const action = treeNodeRowAction(node.type, canExpand.value, settingsStore.editorSettings.sidebarActivation);
   if (action === "open-data") {
     openData();
+  } else if (node.type === "mongo-collection") {
+    openMongoCollectionData(node);
   } else if (node.type === "procedure" || node.type === "function" || node.type === "sequence" || node.type === "package" || node.type === "package-body") {
     void viewObjectSource();
   } else if (action === "toggle") {
@@ -773,9 +773,18 @@ function onDoubleClick() {
     openData();
   } else if (action === "open-source") {
     void viewObjectSource();
+  } else if (action === "toggle" && props.node.type === "mongo-collection") {
+    openMongoCollectionData(props.node);
   } else if (action === "toggle") {
     toggle();
   }
+}
+
+function openMongoCollectionData(node: TreeNode) {
+  if (node.type !== "mongo-collection" || !node.connectionId || !node.database) return;
+  const tabTitle = `${node.database}.${node.label}`;
+  const tab = queryStore.createTab(node.connectionId, node.database, tabTitle, "mongo");
+  queryStore.updateSql(tab, node.label);
 }
 
 async function openObjectBrowser() {

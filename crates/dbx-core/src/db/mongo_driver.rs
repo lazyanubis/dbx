@@ -1,7 +1,7 @@
 use mongodb::{
     bson::{doc, oid::ObjectId, Bson, DateTime, Document},
     options::ClientOptions,
-    Client,
+    Client, IndexModel,
 };
 use serde::{Deserialize, Serialize};
 
@@ -115,32 +115,36 @@ pub async fn list_indexes(client: &Client, database: &str, collection: &str) -> 
     let mut cursor = col.list_indexes().await.map_err(|e| e.to_string())?;
     let mut indexes = Vec::new();
     while let Some(model) = cursor.try_next().await.map_err(|e| e.to_string())? {
-        let name = model.options.as_ref().and_then(|options| options.name.clone()).unwrap_or_else(|| {
-            model.keys.iter().map(|(field, value)| format!("{field}_{value}")).collect::<Vec<_>>().join("_")
-        });
-        let columns = model.keys.keys().cloned().collect::<Vec<_>>();
-        let index_type = if model.keys.is_empty() {
-            None
-        } else {
-            Some(model.keys.iter().map(|(field, value)| format!("{field}: {value}")).collect::<Vec<_>>().join(", "))
-        };
-        let filter = model
-            .options
-            .as_ref()
-            .and_then(|options| options.partial_filter_expression.as_ref())
-            .map(|filter| bson_to_json(&Bson::Document(filter.clone())).to_string());
-        indexes.push(IndexInfo {
-            is_unique: model.options.as_ref().and_then(|options| options.unique).unwrap_or(false),
-            is_primary: name == "_id_",
-            name,
-            columns,
-            filter,
-            index_type,
-            included_columns: None,
-            comment: None,
-        });
+        indexes.push(index_info_from_model(model));
     }
     Ok(indexes)
+}
+
+fn index_info_from_model(model: IndexModel) -> IndexInfo {
+    let name = model.options.as_ref().and_then(|options| options.name.clone()).unwrap_or_else(|| {
+        model.keys.iter().map(|(field, value)| format!("{field}_{value}")).collect::<Vec<_>>().join("_")
+    });
+    let columns = model.keys.keys().cloned().collect::<Vec<_>>();
+    let index_type = if model.keys.is_empty() {
+        None
+    } else {
+        Some(model.keys.iter().map(|(field, value)| format!("{field}: {value}")).collect::<Vec<_>>().join(", "))
+    };
+    let filter = model
+        .options
+        .as_ref()
+        .and_then(|options| options.partial_filter_expression.as_ref())
+        .map(|filter| bson_to_json(&Bson::Document(filter.clone())).to_string());
+    IndexInfo {
+        is_unique: model.options.as_ref().and_then(|options| options.unique).unwrap_or(false),
+        is_primary: name == "_id_",
+        name,
+        columns,
+        filter,
+        index_type,
+        included_columns: None,
+        comment: None,
+    }
 }
 
 pub async fn find_documents(
@@ -567,6 +571,7 @@ fn expand_object_id_string_array(items: &[serde_json::Value]) -> Bson {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mongodb::options::IndexOptions;
 
     #[test]
     fn document_id_filters_try_object_id_then_string_for_hex_ids() {
@@ -650,6 +655,43 @@ mod tests {
         let value = bson_to_json(&Bson::Int64(42));
 
         assert_eq!(value, serde_json::json!(42));
+    }
+
+    #[test]
+    fn index_info_from_model_maps_mongodb_index_metadata() {
+        let model = IndexModel::builder()
+            .keys(doc! { "tenant_id": 1, "created_at": -1 })
+            .options(
+                IndexOptions::builder()
+                    .name("tenant_created_idx".to_string())
+                    .unique(true)
+                    .partial_filter_expression(doc! { "archived": false })
+                    .build(),
+            )
+            .build();
+
+        let index = index_info_from_model(model);
+
+        assert_eq!(index.name, "tenant_created_idx");
+        assert_eq!(index.columns, vec!["tenant_id", "created_at"]);
+        assert!(index.is_unique);
+        assert!(!index.is_primary);
+        assert_eq!(index.index_type.as_deref(), Some("tenant_id: 1, created_at: -1"));
+        assert_eq!(index.filter.as_deref(), Some("{\"archived\":false}"));
+    }
+
+    #[test]
+    fn index_info_from_model_marks_default_id_index_as_primary() {
+        let model = IndexModel::builder()
+            .keys(doc! { "_id": 1 })
+            .options(IndexOptions::builder().name("_id_".to_string()).unique(true).build())
+            .build();
+
+        let index = index_info_from_model(model);
+
+        assert_eq!(index.columns, vec!["_id"]);
+        assert!(index.is_unique);
+        assert!(index.is_primary);
     }
 
     #[test]

@@ -1573,6 +1573,7 @@ pub async fn list_indexes_core(
             PoolKind::Postgres(p) => db::postgres::list_indexes(p, schema, table).await,
             PoolKind::Sqlite(p) => db::sqlite::list_indexes(p, schema, table).await,
             PoolKind::Rqlite(client) => db::rqlite_driver::list_indexes(client, schema, table).await,
+            PoolKind::MongoDb(client) => db::mongo_driver::list_indexes(client, database, table).await,
             _ => Ok(vec![]),
         }
     })
