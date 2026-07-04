@@ -602,6 +602,7 @@ async function confirmDrop() {
     await api.executeQuery(props.connection.id, props.database, sql);
     const successKey = row.type === "VIEW" ? "contextMenu.dropViewSuccess" : row.type === "PROCEDURE" ? "contextMenu.dropProcedureSuccess" : row.type === "FUNCTION" ? "contextMenu.dropFunctionSuccess" : "contextMenu.dropTableSuccess";
     toast(t(successKey, { name: row.name }));
+    closeDroppedTableObjectTabsForRow(row);
     await reload();
     await connectionStore.refreshObjectListTreeNode(props.connection.id, props.database, row.schema || selectedSchema.value);
   } catch (e: any) {
@@ -666,6 +667,25 @@ function openViewData(row: ObjectBrowserRow) {
 function openStructureEditor(row: ObjectBrowserRow) {
   if (row.type !== "TABLE") return;
   queryStore.openTableStructure(props.connection.id, props.database, row.schema || selectedSchema.value, row.name);
+}
+
+function droppedTableObjectTypeForRow(row: ObjectBrowserRow): "TABLE" | "VIEW" | "MATERIALIZED_VIEW" | null {
+  if (row.type === "TABLE") return "TABLE";
+  if (row.type === "VIEW") return "VIEW";
+  if (row.type === "MATERIALIZED_VIEW") return "MATERIALIZED_VIEW";
+  return null;
+}
+
+function closeDroppedTableObjectTabsForRow(row: ObjectBrowserRow) {
+  const objectType = droppedTableObjectTypeForRow(row);
+  if (!objectType) return;
+  queryStore.closeDroppedTableObjectTabs({
+    connectionId: props.connection.id,
+    database: props.database,
+    schema: row.schema || selectedSchema.value,
+    name: row.name,
+    objectType,
+  });
 }
 
 function openDiagram(row: ObjectBrowserRow) {
@@ -796,6 +816,7 @@ async function confirmBatchDropTables() {
         name: row.name,
       });
       await api.executeQuery(props.connection.id, props.database, sql);
+      closeDroppedTableObjectTabsForRow(row);
     }
     toast(t("objects.batchDropSuccess", { count: targets.length }));
     clearTableSelection();

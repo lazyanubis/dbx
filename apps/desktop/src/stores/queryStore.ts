@@ -62,12 +62,32 @@ interface BuildQueryResultExportRequestOptions {
   format: "csv" | "xlsx";
 }
 
+type DroppedTableObjectType = "TABLE" | "VIEW" | "MATERIALIZED_VIEW";
+
+interface DroppedTableObjectTarget {
+  connectionId: string;
+  database: string;
+  schema?: string;
+  schemaCandidates?: Array<string | undefined>;
+  name: string;
+  objectType?: DroppedTableObjectType;
+}
+
 function tabClientSessionId(tab: Pick<QueryTab, "id">, suffix?: (typeof BACKGROUND_CLIENT_SESSION_SUFFIXES)[number]): string {
   return suffix ? `${tab.id}:${suffix}` : tab.id;
 }
 
 function resultRunCacheKey(tabId: string, runId: string): string {
   return `tab:${tabId}:run:${runId}`;
+}
+
+function normalizeOptionalSchema(schema: string | null | undefined): string {
+  return schema?.trim() ?? "";
+}
+
+function droppedTableObjectSchemaCandidates(target: DroppedTableObjectTarget): Set<string> {
+  const schemas = target.schemaCandidates?.length ? target.schemaCandidates : [target.schema];
+  return new Set(schemas.map(normalizeOptionalSchema));
 }
 
 function markQueryResultRowsRaw(result: QueryResult): QueryResult {
@@ -1217,6 +1237,30 @@ export const useQueryStore = defineStore("query", () => {
 
   function closeDatabaseTabs(connectionId: string, database: string) {
     closeTabsWhere((tab) => tab.connectionId === connectionId && tab.database === database);
+  }
+
+  function tabMatchesDroppedTableObject(tab: QueryTab, target: DroppedTableObjectTarget): boolean {
+    if (tab.connectionId !== target.connectionId || tab.database !== target.database) return false;
+    const targetSchemas = droppedTableObjectSchemaCandidates(target);
+
+    if (tab.mode === "data") {
+      const tableMeta = tableMetaForDataTab(tab);
+      if (!tableMeta || tableMeta.tableName !== target.name) return false;
+      return targetSchemas.has(normalizeOptionalSchema(tableMeta.schema ?? tab.schema));
+    }
+
+    if ((target.objectType ?? "TABLE") === "TABLE" && tab.mode === "structure") {
+      if ((tab.structureTableName || "") !== target.name) return false;
+      return targetSchemas.has(normalizeOptionalSchema(tab.schema));
+    }
+
+    return false;
+  }
+
+  function closeDroppedTableObjectTabs(target: DroppedTableObjectTarget) {
+    // A dropped table-like object makes existing data/structure tabs stale; close
+    // them immediately instead of letting the next refresh fail against a missing object.
+    closeTabsWhere((tab) => tabMatchesDroppedTableObject(tab, target));
   }
 
   function releaseTabsWhere(predicate: (tab: QueryTab) => boolean) {
@@ -2857,6 +2901,7 @@ export const useQueryStore = defineStore("query", () => {
     duplicateTab,
     closeConnectionTabs,
     closeDatabaseTabs,
+    closeDroppedTableObjectTabs,
     releaseConnectionTabs,
     releaseDatabaseTabs,
     isDatabaseOpen,

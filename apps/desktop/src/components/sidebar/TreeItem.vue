@@ -1963,6 +1963,28 @@ function canDropTreeNode(node: TreeNode): boolean {
   return canDropTableChildObjectNode(node);
 }
 
+function droppedTableObjectTypeForNode(node: TreeNode): "TABLE" | "VIEW" | "MATERIALIZED_VIEW" | null {
+  if (node.type === "table") return "TABLE";
+  if (node.type === "view") return "VIEW";
+  if (node.type === "materialized_view") return "MATERIALIZED_VIEW";
+  return null;
+}
+
+function closeDroppedTableObjectTabsForNode(node: TreeNode) {
+  const objectType = droppedTableObjectTypeForNode(node);
+  if (!objectType || !node.connectionId || !node.database) return;
+  const config = connectionStore.getConfig(node.connectionId);
+  const dataTabSchema = connectionObjectTreeNodeSchema(config, node.database, node.schema);
+  queryStore.closeDroppedTableObjectTabs({
+    connectionId: node.connectionId,
+    database: node.database,
+    schema: dataTabSchema,
+    schemaCandidates: [node.schema, dataTabSchema],
+    name: node.label,
+    objectType,
+  });
+}
+
 function selectedBatchDropTargets(): TreeNode[] {
   const selected = selectedTreeNodesInVisibleOrder();
   if (selected.length <= 1 || !selected.some((node) => node.id === props.node.id)) return [];
@@ -2185,6 +2207,7 @@ async function confirmDropObject() {
     await api.executeQuery(node.connectionId, node.database, sql, node.schema);
     const msgKey = node.type === "view" ? "contextMenu.dropViewSuccess" : node.type === "materialized_view" ? "contextMenu.dropViewSuccess" : node.type === "procedure" ? "contextMenu.dropProcedureSuccess" : "contextMenu.dropFunctionSuccess";
     toast(t(msgKey, { name: node.label }), 3000);
+    closeDroppedTableObjectTabsForNode(node);
     if (node.type === "view" || node.type === "materialized_view") {
       connectionStore.removeTreeNode(node.id);
     } else {
@@ -2247,6 +2270,7 @@ async function confirmBatchDrop() {
       const sql = await dropSqlForTreeNode(target);
       if (!sql) continue;
       await api.executeQuery(target.connectionId, target.database, sql, target.schema);
+      closeDroppedTableObjectTabsForNode(target);
       connectionStore.removeTreeNode(target.id);
     }
     toast(t("contextMenu.batchDropSuccess", { count: targets.length }), 3000);
@@ -2390,6 +2414,7 @@ async function confirmDropTable() {
     const sql = dropTablePreviewSql.value || (await buildDropTableSql(tableAdminSqlOptions()));
     await api.executeQuery(node.connectionId, node.database, sql, node.schema);
     toast(t("contextMenu.dropTableSuccess", { name: node.label }), 3000);
+    closeDroppedTableObjectTabsForNode(node);
     connectionStore.removeTreeNode(node.id);
   } catch (e: any) {
     toast(t("contextMenu.tableOperationFailed", { message: e?.message || String(e) }), 5000);
