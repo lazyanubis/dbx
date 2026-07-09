@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, defineAsyncComponent, watch, nextTick, onMounted, onUnmounted } from "vue";
 import { safeLocalStorageGet, safeLocalStorageSet } from "@/lib/backend/safeStorage";
+import { appendDebugLog, isDebugLoggingEnabled } from "@/lib/backend/debugLog";
 import type { CSSProperties } from "vue";
 import { useI18n } from "vue-i18n";
 import { Check, Columns3, EyeOff, Loader2, Search, GitBranch, BarChart3, TableProperties, ChevronDown, ChevronUp, Inbox, RefreshCcw, Timer, Wrench, Toolbox, ListChecks, Database, Download, Upload, X, Pin, Rows3, SquareDashed, Minus, Plus } from "@lucide/vue";
@@ -20,10 +21,11 @@ let dataGridComponentPromise: Promise<typeof import("@/components/grid/DataGrid.
 function loadDataGridComponent() {
   if (!dataGridComponentPromise) {
     dataGridComponentPromise = (async () => {
-      const startedAt = performance.now();
-      console.info("[DBX][DataGrid:load:start]");
+      const shouldLogTiming = isDebugLoggingEnabled();
+      const startedAt = shouldLogTiming ? performance.now() : 0;
+      if (shouldLogTiming) appendDebugLog("info", "[DBX][DataGrid:load:start]");
       const component = await import("@/components/grid/DataGrid.vue");
-      console.info("[DBX][DataGrid:load:done]", { elapsed: `${Math.round(performance.now() - startedAt)}ms` });
+      if (shouldLogTiming) appendDebugLog("info", "[DBX][DataGrid:load:done]", { elapsed: `${Math.round(performance.now() - startedAt)}ms` });
       return component;
     })();
   }
@@ -477,8 +479,9 @@ watch(
   () => props.activeTab.result,
   (result) => {
     if (!result) return;
+    if (!isDebugLoggingEnabled()) return;
     const startedAt = performance.now();
-    console.info("[DBX][ContentArea:result:observed]", {
+    appendDebugLog("info", "[DBX][ContentArea:result:observed]", {
       tabId: props.activeTab.id,
       rowCount: result.rows.length,
       columnCount: result.columns.length,
@@ -486,13 +489,13 @@ watch(
       isExecuting: props.activeTab.isExecuting,
     });
     nextTick(() => {
-      console.info("[DBX][ContentArea:result:nextTick]", {
+      appendDebugLog("info", "[DBX][ContentArea:result:nextTick]", {
         tabId: props.activeTab.id,
         elapsed: `${Math.round(performance.now() - startedAt)}ms`,
         isExecuting: props.activeTab.isExecuting,
       });
       requestAnimationFrame(() => {
-        console.info("[DBX][ContentArea:result:first-frame]", {
+        appendDebugLog("info", "[DBX][ContentArea:result:first-frame]", {
           tabId: props.activeTab.id,
           elapsed: `${Math.round(performance.now() - startedAt)}ms`,
           isExecuting: props.activeTab.isExecuting,

@@ -156,6 +156,7 @@ import { getDataGridConditionSuggestionPosition } from "@/lib/dataGrid/dataGridC
 import { caretPositionInsideInsertedSqlSingleQuotes, insertedSqlSingleQuoteAtCaret } from "@/lib/sql/sqlQuoteCaret";
 import { effectiveDatabaseTypeForConnection } from "@/lib/database/jdbcDialect";
 import { isMacOS } from "@/lib/backend/platform";
+import { appendDebugLog, isDebugLoggingEnabled } from "@/lib/backend/debugLog";
 import { formatShortcut } from "@/lib/editor/shortcutRegistry";
 import { SearchableSelect } from "@/components/ui/searchable-select";
 
@@ -252,6 +253,10 @@ const saveShortcutLabel = computed(() => formatShortcut(settingsStore.editorSett
 const DATA_GRID_COMPACT_TOPBAR_WIDTH = 900;
 const AUTO_REFRESH_INTERVAL_OPTIONS = [5, 10, 30, 60, 300];
 
+function logDataGridTiming(message: string, payload?: Record<string, unknown>) {
+  appendDebugLog("info", message, payload);
+}
+
 const emit = defineEmits<{
   reload: [sql?: string, searchText?: string, whereInput?: string, orderBy?: string, limit?: number, offset?: number];
   paginate: [offset: number, limit: number, whereInput?: string, orderBy?: string];
@@ -265,14 +270,16 @@ const autoRefreshEnabled = ref(false);
 let autoRefreshTimer: ReturnType<typeof setInterval> | undefined;
 const autoRefreshLabel = computed(() => (autoRefreshEnabled.value ? t("tabs.autoRefreshEvery", { seconds: autoRefreshIntervalSeconds.value }) : t("tabs.autoRefresh")));
 
-console.info("[DBX][DataGrid:setup]", {
-  traceId: dataGridTraceId,
-  cacheKey: props.cacheKey,
-  rowCount: props.result.rows.length,
-  columnCount: props.result.columns.length,
-  backendMs: props.result.execution_time_ms,
-  loading: props.loading,
-});
+if (isDebugLoggingEnabled()) {
+  logDataGridTiming("[DBX][DataGrid:setup]", {
+    traceId: dataGridTraceId,
+    cacheKey: props.cacheKey,
+    rowCount: props.result.rows.length,
+    columnCount: props.result.columns.length,
+    backendMs: props.result.execution_time_ms,
+    loading: props.loading,
+  });
+}
 
 const transposeRowIndex = ref<number | null>(null);
 const showTranspose = ref(false);
@@ -282,8 +289,9 @@ const preserveTransposeOnNextResult = ref(false);
 watch(
   () => props.result,
   (result) => {
+    if (!isDebugLoggingEnabled()) return;
     const startedAt = performance.now();
-    console.info("[DBX][DataGrid:result:prop]", {
+    logDataGridTiming("[DBX][DataGrid:result:prop]", {
       traceId: dataGridTraceId,
       cacheKey: props.cacheKey,
       rowCount: result.rows.length,
@@ -294,14 +302,14 @@ watch(
     });
 
     nextTick(() => {
-      console.info("[DBX][DataGrid:result:nextTick]", {
+      logDataGridTiming("[DBX][DataGrid:result:nextTick]", {
         traceId: dataGridTraceId,
         cacheKey: props.cacheKey,
         elapsed: `${Math.round(performance.now() - startedAt)}ms`,
         loading: props.loading,
       });
       requestAnimationFrame(() => {
-        console.info("[DBX][DataGrid:result:first-frame]", {
+        logDataGridTiming("[DBX][DataGrid:result:first-frame]", {
           traceId: dataGridTraceId,
           cacheKey: props.cacheKey,
           elapsed: `${Math.round(performance.now() - startedAt)}ms`,
@@ -2471,6 +2479,8 @@ const gridVerticalScrollbarDragging = ref(false);
 let gridHorizontalScrollbarFrame = 0;
 let gridHorizontalScrollbarDragFrame = 0;
 let gridHorizontalScrollbarPendingClientX = 0;
+let gridVerticalScrollbarDragFrame = 0;
+let gridVerticalScrollbarPendingClientY = 0;
 let gridHorizontalScrollbarResizeObserver: ResizeObserver | null = null;
 let dataGridTopbarResizeObserver: ResizeObserver | null = null;
 let cellEditResizeObserver: ResizeObserver | null = null;
@@ -2482,8 +2492,10 @@ let gridHorizontalScrollbarDragState: {
   maxScrollLeft: number;
 } | null = null;
 let gridVerticalScrollbarDragState: {
+  scroller: HTMLElement;
   trackRect: DOMRect;
   thumbOffsetPx: number;
+  maxScrollTop: number;
 } | null = null;
 const hiddenColumnIndexes = ref<Set<number>>(new Set());
 const nullColumnsHidden = ref(false);
@@ -2856,6 +2868,7 @@ function stopGridHorizontalScrollbarDrag() {
 
 function stopGridVerticalScrollbarDrag() {
   if (!gridVerticalScrollbarDragState) return;
+  flushGridVerticalScrollbarDrag();
   gridVerticalScrollbarDragState = null;
   gridVerticalScrollbarDragging.value = false;
   window.removeEventListener("pointermove", onGridVerticalScrollbarPointerMove, true);
@@ -2892,26 +2905,42 @@ function startGridHorizontalScrollbarDrag(event: PointerEvent) {
   scheduleGridHorizontalScrollbarDrag(event.clientX);
 }
 
-function applyGridVerticalScrollbarDrag(clientY: number) {
-  const scroller = gridScrollerElement();
+function applyPendingGridVerticalScrollbarDrag() {
+  gridVerticalScrollbarDragFrame = 0;
   const dragState = gridVerticalScrollbarDragState;
-  if (!scroller || !dragState) return;
-
-  const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
-  if (maxScrollTop <= 1) return;
+  if (!dragState) return;
 
   const thumbHeightPx = dragState.trackRect.height * (gridVerticalScrollbarThumbHeightPercent.value / 100);
   const maxThumbTopPx = Math.max(1, dragState.trackRect.height - thumbHeightPx);
-  const thumbTopPx = Math.min(maxThumbTopPx, Math.max(0, clientY - dragState.trackRect.top - dragState.thumbOffsetPx));
-  scroller.scrollTop = (thumbTopPx / maxThumbTopPx) * maxScrollTop;
+  const thumbTopPx = Math.min(maxThumbTopPx, Math.max(0, gridVerticalScrollbarPendingClientY - dragState.trackRect.top - dragState.thumbOffsetPx));
+  const scroller = dragState.scroller;
+  const nextScrollTop = (thumbTopPx / maxThumbTopPx) * dragState.maxScrollTop;
+  if (Math.abs(scroller.scrollTop - nextScrollTop) < 0.5) return;
+  scroller.scrollTop = nextScrollTop;
   updateGridVerticalScrollbar(scroller);
-  if (useCanvasGridRows.value) syncCanvasViewport();
+  if (useCanvasGridRows.value) {
+    canvasScrollTop.value = scroller.scrollTop;
+    drawCanvasGridNow();
+  }
+}
+
+function scheduleGridVerticalScrollbarDrag(clientY: number) {
+  gridVerticalScrollbarPendingClientY = clientY;
+  if (gridVerticalScrollbarDragFrame) return;
+  // Match horizontal dragging: coalesce pointermove bursts to one canvas/layout update per frame.
+  gridVerticalScrollbarDragFrame = requestAnimationFrame(applyPendingGridVerticalScrollbarDrag);
+}
+
+function flushGridVerticalScrollbarDrag() {
+  if (!gridVerticalScrollbarDragFrame) return;
+  cancelAnimationFrame(gridVerticalScrollbarDragFrame);
+  applyPendingGridVerticalScrollbarDrag();
 }
 
 function onGridVerticalScrollbarPointerMove(event: PointerEvent) {
   if (!gridVerticalScrollbarDragState) return;
   event.preventDefault();
-  applyGridVerticalScrollbarDrag(event.clientY);
+  scheduleGridVerticalScrollbarDrag(event.clientY);
 }
 
 function startGridVerticalScrollbarDrag(event: PointerEvent) {
@@ -2919,6 +2948,8 @@ function startGridVerticalScrollbarDrag(event: PointerEvent) {
   const track = gridVerticalScrollbarTrackRef.value;
   if (!scroller || !track || !hasGridVerticalOverflow.value) return;
 
+  const maxScrollTop = Math.max(0, scroller.scrollHeight - scroller.clientHeight);
+  if (maxScrollTop <= 1) return;
   const trackRect = track.getBoundingClientRect();
   const thumbTopPx = trackRect.height * (gridVerticalScrollbarThumbTopPercent.value / 100);
   const thumbHeightPx = trackRect.height * (gridVerticalScrollbarThumbHeightPercent.value / 100);
@@ -2926,8 +2957,10 @@ function startGridVerticalScrollbarDrag(event: PointerEvent) {
   const pointerInsideThumb = pointerY >= thumbTopPx && pointerY <= thumbTopPx + thumbHeightPx;
 
   gridVerticalScrollbarDragState = {
+    scroller,
     trackRect,
     thumbOffsetPx: pointerInsideThumb ? pointerY - thumbTopPx : thumbHeightPx / 2,
+    maxScrollTop,
   };
   gridVerticalScrollbarDragging.value = true;
   document.body.style.userSelect = "none";
@@ -2935,7 +2968,7 @@ function startGridVerticalScrollbarDrag(event: PointerEvent) {
   window.addEventListener("pointerup", stopGridVerticalScrollbarDrag, true);
   window.addEventListener("pointercancel", stopGridVerticalScrollbarDrag, true);
   event.preventDefault();
-  applyGridVerticalScrollbarDrag(event.clientY);
+  scheduleGridVerticalScrollbarDrag(event.clientY);
 }
 
 const gridHorizontalScrollbarThumbStyle = computed<CSSProperties>(() => ({
@@ -4258,23 +4291,27 @@ const displayItems = computed<RowItem[]>(() => displayRowRefs.value.map(rowItemF
 watch(
   () => displayRowCount.value,
   (length) => {
-    const startedAt = performance.now();
-    console.info("[DBX][DataGrid:display-items:ready]", {
-      traceId: dataGridTraceId,
-      cacheKey: props.cacheKey,
-      displayItemCount: length,
-      sourceRowCount: props.result.rows.length,
-      elapsedSinceSetup: dataGridElapsed(),
-    });
+    const shouldLogTiming = isDebugLoggingEnabled();
+    const startedAt = shouldLogTiming ? performance.now() : 0;
+    if (shouldLogTiming) {
+      logDataGridTiming("[DBX][DataGrid:display-items:ready]", {
+        traceId: dataGridTraceId,
+        cacheKey: props.cacheKey,
+        displayItemCount: length,
+        sourceRowCount: props.result.rows.length,
+        elapsedSinceSetup: dataGridElapsed(),
+      });
+    }
     nextTick(() => {
       const scrollerEl = gridRef.value?.querySelector<HTMLElement>(".data-grid-scroller");
       if (scrollerEl) {
         updateGridScrollbarGutter(scrollerEl);
         updateGridHorizontalViewport(scrollerEl);
       }
+      if (!shouldLogTiming) return;
       requestAnimationFrame(() => {
         const renderedRows = gridRef.value?.querySelectorAll(".vue-recycle-scroller__item-view").length;
-        console.info("[DBX][DataGrid:display-items:first-frame]", {
+        logDataGridTiming("[DBX][DataGrid:display-items:first-frame]", {
           traceId: dataGridTraceId,
           cacheKey: props.cacheKey,
           displayItemCount: length,
@@ -5961,10 +5998,12 @@ watch(
     detailCell,
     showCellDetail,
     editingCell,
+    // Pending edit structures can contain large nested cell maps; the editor
+    // version ref gives the canvas a cheap invalidation signal without a deep watch.
+    pendingChangesVersion,
   ],
   scheduleCanvasDraw,
 );
-watch([dirtyRows, newRows, deletedRows], scheduleCanvasDraw, { deep: true });
 
 function pauseCanvasGridWork() {
   dataGridIsActive = false;
@@ -6021,6 +6060,9 @@ onUnmounted(() => {
   stopGridVerticalScrollbarDrag();
   if (gridHorizontalScrollbarFrame && typeof cancelAnimationFrame === "function") {
     cancelAnimationFrame(gridHorizontalScrollbarFrame);
+  }
+  if (gridVerticalScrollbarDragFrame && typeof cancelAnimationFrame === "function") {
+    cancelAnimationFrame(gridVerticalScrollbarDragFrame);
   }
   if (typeof window === "undefined") return;
   window.removeEventListener("resize", scheduleCanvasPixelRatioRefresh);
@@ -7974,23 +8016,27 @@ watch(
   () => props.loading,
   (isLoading) => {
     stopLoadingElapsedTimer();
-    console.info(isLoading ? "[DBX][DataGrid:loading:start]" : "[DBX][DataGrid:loading:stop]", {
-      traceId: dataGridTraceId,
-      cacheKey: props.cacheKey,
-      elapsedSinceSetup: dataGridElapsed(),
-    });
+    if (isDebugLoggingEnabled()) {
+      logDataGridTiming(isLoading ? "[DBX][DataGrid:loading:start]" : "[DBX][DataGrid:loading:stop]", {
+        traceId: dataGridTraceId,
+        cacheKey: props.cacheKey,
+        elapsedSinceSetup: dataGridElapsed(),
+      });
+    }
     if (isLoading) {
       startLoadingElapsedTimer();
     } else {
-      nextTick(() => {
-        requestAnimationFrame(() => {
-          console.info("[DBX][DataGrid:loading:stop:first-frame]", {
-            traceId: dataGridTraceId,
-            cacheKey: props.cacheKey,
-            elapsedSinceSetup: dataGridElapsed(),
+      if (isDebugLoggingEnabled()) {
+        nextTick(() => {
+          requestAnimationFrame(() => {
+            logDataGridTiming("[DBX][DataGrid:loading:stop:first-frame]", {
+              traceId: dataGridTraceId,
+              cacheKey: props.cacheKey,
+              elapsedSinceSetup: dataGridElapsed(),
+            });
           });
         });
-      });
+      }
     }
   },
 );

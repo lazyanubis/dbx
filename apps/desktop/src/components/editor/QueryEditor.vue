@@ -110,6 +110,7 @@ const view = shallowRef<EditorViewType | null>(null);
 let viewportEmitFrame: number | null = null;
 let viewportRestoreFrame: number | null = null;
 let latestViewport: { scrollTop: number; scrollLeft: number } | undefined = props.initialViewport;
+let lastEmittedViewport: { scrollTop: number; scrollLeft: number } | undefined = props.initialViewport;
 let latestSelection: { anchor: number; head: number } | undefined = props.initialSelection;
 const connectionStore = useConnectionStore();
 const settingsStore = useSettingsStore();
@@ -3226,6 +3227,10 @@ function readEditorViewport(currentView: EditorViewType) {
   };
 }
 
+function sameEditorViewport(a: { scrollTop: number; scrollLeft: number } | undefined, b: { scrollTop: number; scrollLeft: number }) {
+  return a?.scrollTop === b.scrollTop && a.scrollLeft === b.scrollLeft;
+}
+
 function normalizedEditorSelection(selection: { anchor: number; head: number } | undefined, docLength: number) {
   if (!selection) return undefined;
   return {
@@ -3270,6 +3275,8 @@ function restoreEditorFocus() {
 }
 
 function emitEditorViewport(viewport: { scrollTop: number; scrollLeft: number }) {
+  if (sameEditorViewport(lastEmittedViewport, viewport)) return;
+  lastEmittedViewport = { ...viewport };
   emit("viewportChange", viewport);
 }
 

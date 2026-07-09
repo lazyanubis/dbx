@@ -322,6 +322,9 @@ export const useQueryStore = defineStore("query", () => {
   const closeConfirmContext = ref<CloseConfirmContext>("tab");
   const tableStructureRefreshVersions = ref<Record<string, number>>({});
   const savedSqlEditorPositionTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  let resultCacheTrimScheduled = false;
+  let resultCacheTrimRunning = false;
+  let resultCacheTrimRequested = false;
 
   function tableStructureKey(connectionId: string, database: string, schema: string | undefined, tableName: string): string {
     return [connectionId, database, schema || "", tableName].map((part) => part.toLowerCase()).join("\u0000");
@@ -1561,6 +1564,7 @@ export const useQueryStore = defineStore("query", () => {
   function updateEditorViewport(id: string, viewport: { scrollTop: number; scrollLeft: number }) {
     const tab = tabs.value.find((t) => t.id === id);
     if (!tab) return;
+    if (tab.editorViewport?.scrollTop === viewport.scrollTop && tab.editorViewport?.scrollLeft === viewport.scrollLeft) return;
     tab.editorViewport = viewport;
     queueSavedSqlEditorPositionPersist(tab);
   }
@@ -2691,7 +2695,7 @@ export const useQueryStore = defineStore("query", () => {
         });
       }
     }
-    await trimResultCache();
+    scheduleResultCacheTrim();
   }
 
   async function explainTabSql(id: string, sql: string, databaseType?: DatabaseType, explainMode?: string) {
@@ -2884,6 +2888,39 @@ export const useQueryStore = defineStore("query", () => {
     if (inactive.length > MAX_CACHED_RESULTS) {
       const toEvict = inactive.slice(0, inactive.length - MAX_CACHED_RESULTS);
       await Promise.all(toEvict.map((t) => evictCachedResult(t)));
+    }
+  }
+
+  function scheduleResultCacheTrim() {
+    resultCacheTrimRequested = true;
+    if (resultCacheTrimScheduled || resultCacheTrimRunning) return;
+    resultCacheTrimScheduled = true;
+
+    const run = () => {
+      resultCacheTrimScheduled = false;
+      void runRequestedResultCacheTrim();
+    };
+
+    // Eviction serializes large result payloads; schedule it after the result
+    // assignment so the grid can paint before cache maintenance starts.
+    if (typeof window !== "undefined" && "requestIdleCallback" in window) {
+      window.requestIdleCallback(run, { timeout: 1500 });
+    } else {
+      setTimeout(run, 0);
+    }
+  }
+
+  async function runRequestedResultCacheTrim() {
+    if (resultCacheTrimRunning) return;
+    resultCacheTrimRunning = true;
+    try {
+      while (resultCacheTrimRequested) {
+        resultCacheTrimRequested = false;
+        await trimResultCache();
+      }
+    } finally {
+      resultCacheTrimRunning = false;
+      if (resultCacheTrimRequested) scheduleResultCacheTrim();
     }
   }
 
