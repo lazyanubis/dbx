@@ -2,8 +2,16 @@
 import fs from "node:fs";
 
 const LABEL_PREFIX = "db/";
+const USER_PRIORITY_PREFIX = "user-priority/";
 const API_VERSION = "2022-11-28";
 const dryRun = process.env.DRY_RUN === "1" || process.env.DRY_RUN === "true";
+
+const USER_PRIORITY_LABELS = {
+  P0: { color: "b60205", description: "User-reported priority: urgent" },
+  P1: { color: "d93f0b", description: "User-reported priority: important" },
+  P2: { color: "fbca04", description: "User-reported priority: normal" },
+  P3: { color: "bfd4f2", description: "User-reported priority: low" },
+};
 
 const LABEL_PALETTE = [
   "0e8a16",
@@ -120,16 +128,11 @@ function stablePaletteColor(value) {
   return LABEL_PALETTE[hash % LABEL_PALETTE.length];
 }
 
-function extractDatabaseField(body) {
+function extractIssueFormSection(body, predicate) {
   const matches = [...String(body || "").matchAll(/^###\s+(.+?)\s*$/gm)];
   for (const [index, match] of matches.entries()) {
     const heading = match[1].trim();
-    const isDatabaseHeading =
-      heading.includes("数据库类型") ||
-      heading.toLowerCase().includes("database type") ||
-      /^database$/i.test(heading);
-
-    if (!isDatabaseHeading) continue;
+    if (!predicate(heading)) continue;
 
     const start = match.index + match[0].length;
     const end = matches[index + 1]?.index ?? body.length;
@@ -137,6 +140,26 @@ function extractDatabaseField(body) {
   }
 
   return "";
+}
+
+function extractDatabaseField(body) {
+  return extractIssueFormSection(body, (heading) => (
+    heading.includes("数据库类型") ||
+    heading.toLowerCase().includes("database type") ||
+    /^database$/i.test(heading)
+  ));
+}
+
+function extractPriorityField(body) {
+  return extractIssueFormSection(body, (heading) => (
+    heading.includes("优先级") ||
+    heading.toLowerCase().includes("priority")
+  ));
+}
+
+function matchPriorityLabel(value) {
+  const match = String(value || "").normalize("NFKC").match(/\bP([0-3])\b/i);
+  return match ? `P${match[1]}` : null;
 }
 
 function normalizeText(value) {
@@ -313,10 +336,10 @@ async function githubRequest(method, path, body) {
   return payload;
 }
 
-async function ensureLabel(name, description) {
+async function ensureLabel(name, description, color) {
   try {
     const dbType = name.startsWith(LABEL_PREFIX) ? name.slice(LABEL_PREFIX.length) : name;
-    await githubRequest("POST", "/labels", { name, color: stablePaletteColor(dbType), description });
+    await githubRequest("POST", "/labels", { name, color: color || stablePaletteColor(dbType), description });
     console.log(`Created label ${name}`);
   } catch (error) {
     // GitHub returns 422 when the label already exists; that is the common path
@@ -378,12 +401,32 @@ const targetLabels = uniqueMatchedDrivers.map((driver) => `${LABEL_PREFIX}${driv
 const targetLabelColors = Object.fromEntries(
   uniqueMatchedDrivers.map((driver) => [`${LABEL_PREFIX}${driver.dbType}`, stablePaletteColor(driver.dbType)]),
 );
+const priorityField = extractPriorityField(issue.body || "");
+const targetPriorityValue = matchPriorityLabel(priorityField);
+const targetPriorityLabel = targetPriorityValue ? `${USER_PRIORITY_PREFIX}${targetPriorityValue}` : null;
+if (targetPriorityValue) {
+  targetLabelColors[targetPriorityLabel] = USER_PRIORITY_LABELS[targetPriorityValue].color;
+}
 const existingLabels = labelNames(issue.labels);
 const existingDatabaseLabels = existingLabels.filter((name) => name.startsWith(LABEL_PREFIX));
 const staleDatabaseLabels = hasDatabaseField
   ? existingDatabaseLabels.filter((name) => !targetLabels.includes(name))
   : [];
-const labelsToAdd = targetLabels.filter((name) => !existingLabels.includes(name));
+const existingPriorityLabels = existingLabels.filter((name) => name.startsWith(USER_PRIORITY_PREFIX));
+const stalePriorityLabels = targetPriorityLabel
+  ? existingPriorityLabels.filter((name) => name !== targetPriorityLabel)
+  : [];
+const labelsToAdd = [...targetLabels, targetPriorityLabel].filter(Boolean).filter((name) => !existingLabels.includes(name));
+const labelSpecs = [
+  ...uniqueMatchedDrivers.map((driver) => ({
+    name: `${LABEL_PREFIX}${driver.dbType}`,
+    description: `Database: ${driver.label}`,
+    color: stablePaletteColor(driver.dbType),
+  })),
+  ...(targetPriorityValue
+    ? [{ name: targetPriorityLabel, ...USER_PRIORITY_LABELS[targetPriorityValue] }]
+    : []),
+];
 
 console.log(
   JSON.stringify(
@@ -392,9 +435,13 @@ console.log(
       databaseField: hasDatabaseField ? databaseField : null,
       titleMatched: titleMatchedDrivers.map(({ dbType, label, matchedAlias }) => ({ dbType, label, matchedAlias })),
       matched: uniqueMatchedDrivers.map(({ dbType, label, matchedAlias }) => ({ dbType, label, matchedAlias })),
+      priorityField: priorityField || null,
+      priorityLabel: targetPriorityLabel,
+      priorityValue: targetPriorityValue,
       labelsToAdd,
       targetLabelColors,
       staleDatabaseLabels,
+      stalePriorityLabels,
     },
     null,
     2,
@@ -406,8 +453,8 @@ if (dryRun) {
   process.exit(0);
 }
 
-for (const driver of uniqueMatchedDrivers) {
-  await ensureLabel(`${LABEL_PREFIX}${driver.dbType}`, `Database: ${driver.label}`);
+for (const labelSpec of labelSpecs) {
+  await ensureLabel(labelSpec.name, labelSpec.description, labelSpec.color);
 }
 
 if (labelsToAdd.length > 0) {
@@ -418,5 +465,9 @@ if (labelsToAdd.length > 0) {
 }
 
 for (const label of staleDatabaseLabels) {
+  await removeLabel(issue.number, label);
+}
+
+for (const label of stalePriorityLabels) {
   await removeLabel(issue.number, label);
 }
