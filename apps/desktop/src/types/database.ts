@@ -4,6 +4,7 @@ export type DatabaseType =
   | "sqlite"
   | "rqlite"
   | "turso"
+  | "cloudflare-d1"
   | "redis"
   | "duckdb"
   | "clickhouse"

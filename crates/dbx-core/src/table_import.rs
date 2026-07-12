@@ -772,6 +772,35 @@ fn supports_multi_row_insert_values(db_type: &DatabaseType) -> bool {
     !matches!(db_type, DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Iris)
 }
 
+fn build_import_insert_batches_from_rows(
+    rows: &[Vec<serde_json::Value>],
+    columns: &[String],
+    mappings: &[TableImportColumnMapping],
+    target_column_types: &[(String, String)],
+    table: &str,
+    schema: &str,
+    db_type: &DatabaseType,
+    batch_size: usize,
+) -> Result<Vec<ImportSqlBatch>, String> {
+    if rows.is_empty() {
+        return Ok(Vec::new());
+    }
+    if *db_type == DatabaseType::CloudflareD1 {
+        return crate::db::cloudflare_d1::build_import_insert_batches(
+            rows,
+            columns,
+            mappings,
+            target_column_types,
+            table,
+            schema,
+            batch_size,
+        );
+    }
+    Ok(build_import_insert_batch_from_rows(rows, columns, mappings, target_column_types, table, schema, db_type)?
+        .into_iter()
+        .collect())
+}
+
 pub fn build_import_insert_batches(
     data: &ParsedImportFile,
     mappings: &[TableImportColumnMapping],
@@ -781,6 +810,17 @@ pub fn build_import_insert_batches(
     db_type: &DatabaseType,
     batch_size: usize,
 ) -> Result<Vec<ImportSqlBatch>, String> {
+    if *db_type == DatabaseType::CloudflareD1 {
+        return crate::db::cloudflare_d1::build_import_insert_batches(
+            &data.rows,
+            &data.columns,
+            mappings,
+            target_column_types,
+            table,
+            schema,
+            batch_size.clamp(1, 100),
+        );
+    }
     let mapped = mapping_indexes(data, mappings)?;
     let columns = mapped.iter().map(|(_, target)| target.clone()).collect::<Vec<_>>();
     let column_types = columns
@@ -819,7 +859,7 @@ pub fn build_import_insert_batches(
 pub fn truncate_sql(table: &str, schema: &str, db_type: &DatabaseType) -> String {
     let full_table = qualified_table(table, schema, db_type);
     match db_type {
-        DatabaseType::Sqlite => format!("DELETE FROM {full_table}"),
+        DatabaseType::Sqlite | DatabaseType::CloudflareD1 => format!("DELETE FROM {full_table}"),
         _ => format!("TRUNCATE TABLE {full_table}"),
     }
 }
@@ -937,7 +977,7 @@ fn text_data_type(db_type: &DatabaseType) -> &'static str {
 
 fn integer_data_type(db_type: &DatabaseType) -> &'static str {
     match db_type {
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "INTEGER",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "INTEGER",
         DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Dameng => "NUMBER(19)",
         DatabaseType::ClickHouse => "Int64",
         _ => "BIGINT",
@@ -954,7 +994,7 @@ fn decimal_data_type(db_type: &DatabaseType) -> &'static str {
         | DatabaseType::Highgo
         | DatabaseType::Kwdb
         | DatabaseType::Vastbase => "DOUBLE PRECISION",
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "REAL",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "REAL",
         DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Dameng => "BINARY_DOUBLE",
         DatabaseType::ClickHouse => "Float64",
         _ => "DOUBLE",
@@ -970,7 +1010,7 @@ fn boolean_data_type(db_type: &DatabaseType) -> &'static str {
         | DatabaseType::Sundb
         | DatabaseType::Databend => "TINYINT(1)",
         DatabaseType::SqlServer => "BIT",
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "INTEGER",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "INTEGER",
         DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Dameng => "NUMBER(1)",
         DatabaseType::ClickHouse => "UInt8",
         _ => "BOOLEAN",
@@ -979,7 +1019,7 @@ fn boolean_data_type(db_type: &DatabaseType) -> &'static str {
 
 fn date_data_type(db_type: &DatabaseType) -> &'static str {
     match db_type {
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "TEXT",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "TEXT",
         DatabaseType::ClickHouse => "Date",
         _ => "DATE",
     }
@@ -994,7 +1034,7 @@ fn timestamp_data_type(db_type: &DatabaseType) -> &'static str {
         | DatabaseType::Sundb
         | DatabaseType::Databend => "DATETIME",
         DatabaseType::SqlServer => "DATETIME2",
-        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso => "TEXT",
+        DatabaseType::Sqlite | DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => "TEXT",
         DatabaseType::ClickHouse => "DateTime64",
         _ => "TIMESTAMP",
     }
@@ -1382,6 +1422,7 @@ where
         };
         let effective_batch_size = match db_type {
             DatabaseType::Oracle | DatabaseType::OceanbaseOracle => 1,
+            DatabaseType::CloudflareD1 => batch_size.clamp(1, 100),
             _ => batch_size.max(1),
         };
         let mut rows_imported = 0;
@@ -1418,7 +1459,7 @@ where
             pending_rows.push(delimited_record_to_row(&record, columns.len(), config));
 
             if pending_rows.len() >= effective_batch_size {
-                let batch = match build_import_insert_batch_from_rows(
+                let batches = match build_import_insert_batches_from_rows(
                     &pending_rows,
                     &columns,
                     &request.mappings,
@@ -1426,12 +1467,9 @@ where
                     &request.table,
                     &request.schema,
                     db_type,
+                    effective_batch_size,
                 ) {
-                    Ok(Some(batch)) => batch,
-                    Ok(None) => {
-                        pending_rows.clear();
-                        continue;
-                    }
+                    Ok(batches) => batches,
                     Err(error) => {
                         return Err(emit_import_error(
                             &mut progress_callback,
@@ -1442,10 +1480,18 @@ where
                         ))
                     }
                 };
-                if let Err(error) = execute_on_pool(state, pool_key, &batch.sql).await {
-                    return Err(emit_import_error(&mut progress_callback, request, rows_imported, total_rows, error));
+                for batch in batches {
+                    if let Err(error) = execute_on_pool(state, pool_key, &batch.sql).await {
+                        return Err(emit_import_error(
+                            &mut progress_callback,
+                            request,
+                            rows_imported,
+                            total_rows,
+                            error,
+                        ));
+                    }
+                    rows_imported = (rows_imported + batch.row_count).min(total_rows);
                 }
-                rows_imported = (rows_imported + batch.row_count).min(total_rows);
                 pending_rows.clear();
                 progress_callback(TableImportProgress {
                     import_id: request.import_id.clone(),
@@ -1468,7 +1514,7 @@ where
                 });
                 return Err("Import cancelled".to_string());
             }
-            let batch = match build_import_insert_batch_from_rows(
+            let batches = match build_import_insert_batches_from_rows(
                 &pending_rows,
                 &columns,
                 &request.mappings,
@@ -1476,14 +1522,14 @@ where
                 &request.table,
                 &request.schema,
                 db_type,
+                effective_batch_size,
             ) {
-                Ok(Some(batch)) => batch,
-                Ok(None) => ImportSqlBatch { sql: String::new(), row_count: 0 },
+                Ok(batches) => batches,
                 Err(error) => {
                     return Err(emit_import_error(&mut progress_callback, request, rows_imported, total_rows, error))
                 }
             };
-            if !batch.sql.is_empty() {
+            for batch in batches {
                 if let Err(error) = execute_on_pool(state, pool_key, &batch.sql).await {
                     return Err(emit_import_error(&mut progress_callback, request, rows_imported, total_rows, error));
                 }
