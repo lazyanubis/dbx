@@ -2539,7 +2539,6 @@ enum KeepaliveTarget {
     Postgres(deadpool_postgres::Pool),
     Rqlite(db::rqlite_driver::RqliteClient),
     Turso(db::turso_driver::TursoClient),
-    CloudflareD1(db::cloudflare_d1_driver::CloudflareD1Client),
     MongoDb { client: mongodb::Client, database: Option<String> },
     ClickHouse(db::clickhouse_driver::ChClient),
     SqlServer(Arc<tokio::sync::Mutex<db::sqlserver::SqlServerClient>>),
@@ -2555,7 +2554,6 @@ fn keepalive_target_from_pool(pool: &PoolKind, config: &ConnectionConfig) -> Opt
         PoolKind::Postgres(pool) => Some(KeepaliveTarget::Postgres(pool.clone())),
         PoolKind::Rqlite(client) => Some(KeepaliveTarget::Rqlite(client.clone())),
         PoolKind::Turso(client) => Some(KeepaliveTarget::Turso(client.clone())),
-        PoolKind::CloudflareD1(client) => Some(KeepaliveTarget::CloudflareD1(client.clone())),
         PoolKind::MongoDb(client) => Some(KeepaliveTarget::MongoDb {
             client: client.clone(),
             database: config.effective_database().map(str::to_string),
@@ -2582,7 +2580,6 @@ async fn ping_keepalive_target(target: &mut KeepaliveTarget, timeout: Duration) 
         }
         KeepaliveTarget::Rqlite(client) => db::rqlite_driver::test_connection(client, timeout).await,
         KeepaliveTarget::Turso(client) => db::turso_driver::test_connection(client, timeout).await,
-        KeepaliveTarget::CloudflareD1(client) => db::cloudflare_d1_driver::test_connection(client, timeout).await,
         KeepaliveTarget::MongoDb { client, database } => {
             db::mongo_driver::test_connection(client, timeout, database.as_deref()).await
         }

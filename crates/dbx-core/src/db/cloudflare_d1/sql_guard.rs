@@ -2,7 +2,6 @@ use super::sql_lexer::{complete_sql_statements, lex_sql, SqlLexeme};
 
 const SUPPORTED_PRAGMAS: &[&str] = &[
     "case_sensitive_like",
-    "data_version",
     "defer_foreign_keys",
     "foreign_key_check",
     "foreign_key_list",
@@ -162,6 +161,7 @@ mod tests {
     #[test]
     fn rejects_unsupported_pragma_forms() {
         assert!(validate_sql("PRAGMA journal_mode=WAL").unwrap_err().contains("PRAGMA journal_mode"));
+        assert!(validate_sql("PRAGMA data_version").unwrap_err().contains("PRAGMA data_version"));
         assert!(validate_sql("PRAGMA optimize(-1)").unwrap_err().contains("optimize(-1)"));
         assert!(validate_sql("PRAGMA optimize /* -1 is only a comment */").is_ok());
     }

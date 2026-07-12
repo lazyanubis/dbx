@@ -17,7 +17,7 @@ mod sql_limits;
 mod transfer_tests;
 mod trigger;
 
-pub(crate) use import::build_import_insert_batches;
+pub(crate) use import::{build_import_insert_batches, build_streaming_import_insert_batch};
 pub use sql_limits::MAX_SQL_STATEMENT_BYTES;
 
 const CLOUDFLARE_API_BASE_URL: &str = "https://api.cloudflare.com/client/v4";

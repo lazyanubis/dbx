@@ -744,6 +744,17 @@ pub fn build_import_insert_batch_from_rows(
     if rows.is_empty() {
         return Ok(None);
     }
+    if *db_type == DatabaseType::CloudflareD1 {
+        return crate::db::cloudflare_d1::build_streaming_import_insert_batch(
+            rows,
+            columns,
+            mappings,
+            target_column_types,
+            table,
+            schema,
+            rows.len(),
+        );
+    }
     let mapped = mapping_indexes_for_columns(columns, mappings)?;
     let target_columns = mapped.iter().map(|(_, target)| target.clone()).collect::<Vec<_>>();
     let column_types = target_columns
@@ -770,35 +781,6 @@ pub fn build_import_insert_batch_from_rows(
 
 fn supports_multi_row_insert_values(db_type: &DatabaseType) -> bool {
     !matches!(db_type, DatabaseType::Oracle | DatabaseType::OceanbaseOracle | DatabaseType::Iris)
-}
-
-fn build_import_insert_batches_from_rows(
-    rows: &[Vec<serde_json::Value>],
-    columns: &[String],
-    mappings: &[TableImportColumnMapping],
-    target_column_types: &[(String, String)],
-    table: &str,
-    schema: &str,
-    db_type: &DatabaseType,
-    batch_size: usize,
-) -> Result<Vec<ImportSqlBatch>, String> {
-    if rows.is_empty() {
-        return Ok(Vec::new());
-    }
-    if *db_type == DatabaseType::CloudflareD1 {
-        return crate::db::cloudflare_d1::build_import_insert_batches(
-            rows,
-            columns,
-            mappings,
-            target_column_types,
-            table,
-            schema,
-            batch_size,
-        );
-    }
-    Ok(build_import_insert_batch_from_rows(rows, columns, mappings, target_column_types, table, schema, db_type)?
-        .into_iter()
-        .collect())
 }
 
 pub fn build_import_insert_batches(
@@ -1459,7 +1441,7 @@ where
             pending_rows.push(delimited_record_to_row(&record, columns.len(), config));
 
             if pending_rows.len() >= effective_batch_size {
-                let batches = match build_import_insert_batches_from_rows(
+                let batch = match build_import_insert_batch_from_rows(
                     &pending_rows,
                     &columns,
                     &request.mappings,
@@ -1467,9 +1449,12 @@ where
                     &request.table,
                     &request.schema,
                     db_type,
-                    effective_batch_size,
                 ) {
-                    Ok(batches) => batches,
+                    Ok(Some(batch)) => batch,
+                    Ok(None) => {
+                        pending_rows.clear();
+                        continue;
+                    }
                     Err(error) => {
                         return Err(emit_import_error(
                             &mut progress_callback,
@@ -1480,18 +1465,10 @@ where
                         ))
                     }
                 };
-                for batch in batches {
-                    if let Err(error) = execute_on_pool(state, pool_key, &batch.sql).await {
-                        return Err(emit_import_error(
-                            &mut progress_callback,
-                            request,
-                            rows_imported,
-                            total_rows,
-                            error,
-                        ));
-                    }
-                    rows_imported = (rows_imported + batch.row_count).min(total_rows);
+                if let Err(error) = execute_on_pool(state, pool_key, &batch.sql).await {
+                    return Err(emit_import_error(&mut progress_callback, request, rows_imported, total_rows, error));
                 }
+                rows_imported = (rows_imported + batch.row_count).min(total_rows);
                 pending_rows.clear();
                 progress_callback(TableImportProgress {
                     import_id: request.import_id.clone(),
@@ -1514,7 +1491,7 @@ where
                 });
                 return Err("Import cancelled".to_string());
             }
-            let batches = match build_import_insert_batches_from_rows(
+            let batch = match build_import_insert_batch_from_rows(
                 &pending_rows,
                 &columns,
                 &request.mappings,
@@ -1522,14 +1499,14 @@ where
                 &request.table,
                 &request.schema,
                 db_type,
-                effective_batch_size,
             ) {
-                Ok(batches) => batches,
+                Ok(Some(batch)) => batch,
+                Ok(None) => ImportSqlBatch { sql: String::new(), row_count: 0 },
                 Err(error) => {
                     return Err(emit_import_error(&mut progress_callback, request, rows_imported, total_rows, error))
                 }
             };
-            for batch in batches {
+            if !batch.sql.is_empty() {
                 if let Err(error) = execute_on_pool(state, pool_key, &batch.sql).await {
                     return Err(emit_import_error(&mut progress_callback, request, rows_imported, total_rows, error));
                 }
