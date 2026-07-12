@@ -1014,6 +1014,7 @@ pub fn escape_value_typed(val: &serde_json::Value, db_type: &DatabaseType, colum
         serde_json::Value::Bool(b) => match db_type {
             DatabaseType::Mysql
             | DatabaseType::Sqlite
+            | DatabaseType::CloudflareD1
             | DatabaseType::DuckDb
             | DatabaseType::Doris
             | DatabaseType::StarRocks => {
@@ -1872,7 +1873,7 @@ pub fn generate_upsert_typed(
     }
 
     match db_type {
-        DatabaseType::Postgres | DatabaseType::Sqlite | DatabaseType::DuckDb => {
+        DatabaseType::Postgres | DatabaseType::Sqlite | DatabaseType::CloudflareD1 | DatabaseType::DuckDb => {
             let pk_list = pk_columns.iter().map(|c| quote_identifier(c, db_type)).collect::<Vec<_>>().join(", ");
             let mut sql = format!("INSERT INTO {full_table} ({col_list}) VALUES\n{}", value_rows.join(",\n"));
             if non_pk_columns.is_empty() {
@@ -2060,6 +2061,10 @@ fn generate_transfer_write_sql_batches(
     }
 
     let max_rows = max_transfer_write_rows(db_type, mode);
+    let max_sql_bytes = match db_type {
+        DatabaseType::CloudflareD1 => crate::db::cloudflare_d1::MAX_SQL_STATEMENT_BYTES,
+        _ => MAX_TRANSFER_WRITE_SQL_BYTES,
+    };
     let mut statements = Vec::new();
     let mut start = 0;
 
@@ -2087,7 +2092,7 @@ fn generate_transfer_write_sql_batches(
                 db_type,
                 pk_columns,
             );
-            if candidate.len() > MAX_TRANSFER_WRITE_SQL_BYTES && !accepted.is_empty() {
+            if candidate.len() > max_sql_bytes && !accepted.is_empty() {
                 break;
             }
             accepted = candidate;
@@ -3793,7 +3798,9 @@ where
                 if request.mode == TransferMode::Overwrite {
                     let full_table = qualified_table(&target_table, &request.target_schema, target_db_type);
                     let truncate_sql = match target_db_type {
-                        DatabaseType::Sqlite | DatabaseType::DuckDb => format!("DELETE FROM {full_table}"),
+                        DatabaseType::Sqlite | DatabaseType::CloudflareD1 | DatabaseType::DuckDb => {
+                            format!("DELETE FROM {full_table}")
+                        }
                         _ => format!("TRUNCATE TABLE {full_table}"),
                     };
                     execute_on_pool(state, target_pool_key, &truncate_sql)
@@ -4071,7 +4078,9 @@ where
     if request.mode == TransferMode::Overwrite {
         let full_table = qualified_table(&target_table, &request.target_schema, target_db_type);
         let truncate_sql = match target_db_type {
-            DatabaseType::Sqlite | DatabaseType::DuckDb => format!("DELETE FROM {full_table}"),
+            DatabaseType::Sqlite | DatabaseType::CloudflareD1 | DatabaseType::DuckDb => {
+                format!("DELETE FROM {full_table}")
+            }
             _ => format!("TRUNCATE TABLE {full_table}"),
         };
         execute_on_pool(state, target_pool_key, &truncate_sql).await.map_err(|e| format!("Failed to truncate: {e}"))?;

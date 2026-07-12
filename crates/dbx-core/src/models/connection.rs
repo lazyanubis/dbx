@@ -362,6 +362,8 @@ pub enum DatabaseType {
     Iris,
     #[serde(rename = "turso")]
     Turso,
+    #[serde(rename = "cloudflare-d1")]
+    CloudflareD1,
     #[serde(rename = "influxdb")]
     InfluxDb,
     #[serde(rename = "questdb")]
@@ -678,7 +680,7 @@ impl ConnectionConfig {
             },
             DatabaseType::Redshift => Some("dev"),
             DatabaseType::ClickHouse => Some("default"),
-            DatabaseType::Rqlite | DatabaseType::Turso => Some("main"),
+            DatabaseType::Rqlite | DatabaseType::Turso | DatabaseType::CloudflareD1 => Some("main"),
             DatabaseType::Gaussdb | DatabaseType::OpenGauss => Some("postgres"),
             DatabaseType::Kwdb => Some("defaultdb"),
             DatabaseType::Vastbase => Some("postgres"),
@@ -789,6 +791,7 @@ impl ConnectionConfig {
             DatabaseType::ClickHouse => clickhouse_http_url(self, raw_host, port),
             DatabaseType::Rqlite => rqlite_http_url(self, raw_host, port),
             DatabaseType::Turso => turso_http_url(self, raw_host, port),
+            DatabaseType::CloudflareD1 => cloudflare_d1_api_url(self),
             DatabaseType::SqlServer => {
                 format!("server=tcp:{host},{port};database={}", self.database.as_deref().unwrap_or("master"))
             }
@@ -926,6 +929,7 @@ impl ConnectionConfig {
             DatabaseType::ClickHouse => clickhouse_http_url(self, raw_host, port),
             DatabaseType::Rqlite => rqlite_http_url(self, raw_host, port),
             DatabaseType::Turso => turso_http_url(self, raw_host, port),
+            DatabaseType::CloudflareD1 => cloudflare_d1_api_url(self),
             DatabaseType::SqlServer => format!(
                 "server=tcp:{host},{port};user={};password={};database={}",
                 self.username,
@@ -1612,6 +1616,12 @@ fn turso_http_url(config: &ConnectionConfig, host: &str, port: u16) -> String {
     format!("{scheme}://{}:{port}", bracket_ipv6(trimmed))
 }
 
+fn cloudflare_d1_api_url(config: &ConnectionConfig) -> String {
+    let account_id = config.host.trim();
+    let database_id = config.database.as_deref().unwrap_or_default().trim();
+    format!("https://api.cloudflare.com/client/v4/accounts/{account_id}/d1/database/{database_id}")
+}
+
 fn trim_http_host_port(value: &str, default_port: u16) -> String {
     let authority = value.trim_end_matches('/').split('/').next().unwrap_or(value).split('?').next().unwrap_or(value);
     if authority.starts_with('[') && !authority.contains("]:") {
@@ -1848,6 +1858,22 @@ mod tests {
     fn zookeeper_database_type_uses_stable_wire_name() {
         assert_eq!(serde_json::to_string(&DatabaseType::ZooKeeper).unwrap(), "\"zookeeper\"");
         assert_eq!(serde_json::from_str::<DatabaseType>("\"zookeeper\"").unwrap(), DatabaseType::ZooKeeper);
+    }
+
+    #[test]
+    fn cloudflare_d1_database_type_and_api_url_are_stable() {
+        assert_eq!(serde_json::to_string(&DatabaseType::CloudflareD1).unwrap(), "\"cloudflare-d1\"");
+        assert_eq!(serde_json::from_str::<DatabaseType>("\"cloudflare-d1\"").unwrap(), DatabaseType::CloudflareD1);
+
+        let mut config = mysql_config("", "secret-token", Some("database-id"));
+        config.db_type = DatabaseType::CloudflareD1;
+        config.host = "account-id".to_string();
+        config.port = 443;
+        assert_eq!(
+            config.connection_url(),
+            "https://api.cloudflare.com/client/v4/accounts/account-id/d1/database/database-id"
+        );
+        assert!(!config.connection_url().contains("secret-token"));
     }
 
     #[test]

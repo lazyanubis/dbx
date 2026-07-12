@@ -85,6 +85,7 @@ pub enum PoolKind {
     Sqlite(db::sqlite::SqliteHandle),
     Rqlite(db::rqlite_driver::RqliteClient),
     Turso(db::turso_driver::TursoClient),
+    CloudflareD1(db::cloudflare_d1_driver::CloudflareD1Client),
     Redis(db::redis_driver::RedisConnection),
     DuckDb(DuckDbHandle),
     DuckDbWorker(DuckDbWorkerHandle),
@@ -242,7 +243,11 @@ pub fn database_connection_config(config: &ConnectionConfig, database: Option<&s
     if let Some(db) = database {
         if !matches!(
             db_config.db_type,
-            DatabaseType::Oracle | DatabaseType::Dameng | DatabaseType::MongoDb | DatabaseType::OceanbaseOracle
+            DatabaseType::Oracle
+                | DatabaseType::Dameng
+                | DatabaseType::MongoDb
+                | DatabaseType::OceanbaseOracle
+                | DatabaseType::CloudflareD1
         ) {
             db_config.database = Some(db.to_string());
         }
@@ -1114,6 +1119,9 @@ impl AppState {
                 db::turso_driver::test_connection(&client, connect_timeout).await?;
                 PoolKind::Turso(client)
             }
+            DatabaseType::CloudflareD1 => {
+                PoolKind::CloudflareD1(db::cloudflare_d1_driver::connect(&db_config, connect_timeout).await?)
+            }
             DatabaseType::Redis => {
                 let con = if db_config.uses_redis_cluster() {
                     db::redis_driver::RedisConnection::Cluster(
@@ -1830,6 +1838,18 @@ impl AppState {
                         }
                     }
                 }
+                PoolKind::CloudflareD1(client) => {
+                    let client = client.clone();
+                    drop(connections);
+                    let timeout = crate::db::connection_timeout();
+                    match db::cloudflare_d1_driver::test_connection(&client, timeout).await {
+                        Ok(()) => false,
+                        Err(err) => {
+                            log::warn!("Cloudflare D1 connection pool '{pool_key}' is stale: {err}");
+                            true
+                        }
+                    }
+                }
                 PoolKind::Agent(client) => {
                     let client = client.clone();
                     drop(connections);
@@ -2340,6 +2360,15 @@ impl AppState {
                         false
                     }
                 },
+                PoolKind::CloudflareD1(client) => {
+                    match db::cloudflare_d1_driver::test_connection(client, timeout).await {
+                        Ok(()) => true,
+                        Err(e) => {
+                            log::warn!("Cloudflare D1 connection pool '{key}' is unhealthy: {e}");
+                            false
+                        }
+                    }
+                }
                 PoolKind::Agent(client) => {
                     let mut agent = client.lock().await;
                     match agent.test_connection(serde_json::json!({})).await {
@@ -2540,6 +2569,7 @@ enum KeepaliveTarget {
     Postgres(deadpool_postgres::Pool),
     Rqlite(db::rqlite_driver::RqliteClient),
     Turso(db::turso_driver::TursoClient),
+    CloudflareD1(db::cloudflare_d1_driver::CloudflareD1Client),
     MongoDb { client: mongodb::Client, database: Option<String> },
     ClickHouse(db::clickhouse_driver::ChClient),
     SqlServer(Arc<tokio::sync::Mutex<db::sqlserver::SqlServerClient>>),
@@ -2555,6 +2585,7 @@ fn keepalive_target_from_pool(pool: &PoolKind, config: &ConnectionConfig) -> Opt
         PoolKind::Postgres(pool) => Some(KeepaliveTarget::Postgres(pool.clone())),
         PoolKind::Rqlite(client) => Some(KeepaliveTarget::Rqlite(client.clone())),
         PoolKind::Turso(client) => Some(KeepaliveTarget::Turso(client.clone())),
+        PoolKind::CloudflareD1(client) => Some(KeepaliveTarget::CloudflareD1(client.clone())),
         PoolKind::MongoDb(client) => Some(KeepaliveTarget::MongoDb {
             client: client.clone(),
             database: config.effective_database().map(str::to_string),
@@ -2581,6 +2612,7 @@ async fn ping_keepalive_target(target: &mut KeepaliveTarget, timeout: Duration) 
         }
         KeepaliveTarget::Rqlite(client) => db::rqlite_driver::test_connection(client, timeout).await,
         KeepaliveTarget::Turso(client) => db::turso_driver::test_connection(client, timeout).await,
+        KeepaliveTarget::CloudflareD1(client) => db::cloudflare_d1_driver::test_connection(client, timeout).await,
         KeepaliveTarget::MongoDb { client, database } => {
             db::mongo_driver::test_connection(client, timeout, database.as_deref()).await
         }
@@ -2743,7 +2775,7 @@ fn session_scoped_pool_key_for(
     base_pool_key: String,
     client_session_id: Option<&str>,
 ) -> String {
-    if matches!(db_type, Some(DatabaseType::DuckDb)) {
+    if matches!(db_type, Some(DatabaseType::DuckDb | DatabaseType::CloudflareD1)) {
         return base_pool_key;
     }
     session_scoped_pool_key(base_pool_key, client_session_id)
@@ -2756,6 +2788,7 @@ fn clone_pool_kind(pool: &PoolKind) -> PoolKind {
         PoolKind::Sqlite(p) => PoolKind::Sqlite(p.clone()),
         PoolKind::Rqlite(client) => PoolKind::Rqlite(client.clone()),
         PoolKind::Turso(client) => PoolKind::Turso(client.clone()),
+        PoolKind::CloudflareD1(client) => PoolKind::CloudflareD1(client.clone()),
         #[cfg(feature = "duckdb-bundled")]
         PoolKind::DuckDb(con) => PoolKind::DuckDb(con.clone()),
         #[cfg(feature = "duckdb-bundled")]
@@ -2790,6 +2823,7 @@ pub async fn close_pool_kind(pool: PoolKind) {
         PoolKind::Sqlite(_) => {}
         PoolKind::Rqlite(_) => {}
         PoolKind::Turso(_) => {}
+        PoolKind::CloudflareD1(_) => {}
         PoolKind::Redis(conn) => {
             drop(conn);
         }
@@ -3900,6 +3934,20 @@ mod tests {
     }
 
     #[test]
+    fn cloudflare_d1_query_namespace_does_not_replace_database_id() {
+        let mut config = mysql_config(Some("database-uuid"));
+        config.db_type = DatabaseType::CloudflareD1;
+
+        let scoped = database_connection_config(&config, Some("main"));
+
+        assert_eq!(scoped.database.as_deref(), Some("database-uuid"));
+        assert_eq!(
+            super::base_pool_key_for(Some(DatabaseType::CloudflareD1), "d1-conn", Some("main"), false),
+            "d1-conn"
+        );
+    }
+
+    #[test]
     fn oracle_database_connection_ignores_requested_database() {
         let mut config = mysql_config(Some("ORCL"));
         config.db_type = DatabaseType::Oracle;
@@ -3959,6 +4007,10 @@ mod tests {
         assert_eq!(
             super::session_scoped_pool_key_for(Some(DatabaseType::DuckDb), "duckdb-conn".to_string(), Some("tab-1")),
             "duckdb-conn"
+        );
+        assert_eq!(
+            super::session_scoped_pool_key_for(Some(DatabaseType::CloudflareD1), "d1-conn".to_string(), Some("tab-1"),),
+            "d1-conn"
         );
     }
 
