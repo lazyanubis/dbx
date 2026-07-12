@@ -137,29 +137,40 @@ pub async fn list_tables(client: &CloudflareD1Client, _schema: &str) -> Result<V
 }
 
 pub async fn get_columns(client: &CloudflareD1Client, _schema: &str, table: &str) -> Result<Vec<ColumnInfo>, String> {
-    let result = query_inner(client, &format!("PRAGMA table_info({})", sqlite_ident(table))).await?;
+    // table_info omits generated columns; table_xinfo exposes them and marks
+    // virtual/stored generated columns with hidden values 2 and 3.
+    let result = query_inner(client, &format!("PRAGMA table_xinfo({})", sqlite_ident(table))).await?;
     Ok(result
         .rows
         .into_iter()
-        .map(|row| ColumnInfo {
-            name: value_by_column(&result.columns, &row, "name").unwrap_or_default(),
-            data_type: value_by_column(&result.columns, &row, "type").unwrap_or_default(),
-            is_nullable: value_by_column(&result.columns, &row, "notnull")
+        .map(|row| {
+            let hidden = value_by_column(&result.columns, &row, "hidden")
                 .and_then(|value| value.parse::<i64>().ok())
-                .unwrap_or(0)
-                == 0,
-            column_default: value_by_column(&result.columns, &row, "dflt_value"),
-            is_primary_key: value_by_column(&result.columns, &row, "pk")
-                .and_then(|value| value.parse::<i64>().ok())
-                .unwrap_or(0)
-                > 0,
-            extra: None,
-            comment: None,
-            numeric_precision: None,
-            numeric_scale: None,
-            character_maximum_length: None,
-            enum_values: None,
-            ..Default::default()
+                .unwrap_or(0);
+            ColumnInfo {
+                name: value_by_column(&result.columns, &row, "name").unwrap_or_default(),
+                data_type: value_by_column(&result.columns, &row, "type").unwrap_or_default(),
+                is_nullable: value_by_column(&result.columns, &row, "notnull")
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .unwrap_or(0)
+                    == 0,
+                column_default: value_by_column(&result.columns, &row, "dflt_value"),
+                is_primary_key: value_by_column(&result.columns, &row, "pk")
+                    .and_then(|value| value.parse::<i64>().ok())
+                    .unwrap_or(0)
+                    > 0,
+                extra: match hidden {
+                    2 => Some("generated always as virtual".to_string()),
+                    3 => Some("generated always as stored".to_string()),
+                    _ => None,
+                },
+                comment: None,
+                numeric_precision: None,
+                numeric_scale: None,
+                character_maximum_length: None,
+                enum_values: None,
+                ..Default::default()
+            }
         })
         .collect())
 }
@@ -539,6 +550,35 @@ mod tests {
         assert_eq!(tables[0].table_type, "BASE TABLE");
         assert_eq!(tables[1].name, "active_users");
         assert_eq!(tables[1].table_type, "VIEW");
+        server.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn lists_generated_columns_from_table_xinfo() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let request = read_http_request(&mut socket).await;
+            assert!(request.contains("PRAGMA table_xinfo"));
+
+            let body = r#"{"success":true,"errors":[],"result":[{"success":true,"results":{"columns":["cid","name","type","notnull","dflt_value","pk","hidden"],"rows":[[0,"price","INTEGER",1,null,0,0],[1,"tax","INTEGER",0,null,0,2],[2,"total","INTEGER",0,null,0,3]]},"meta":{"changes":0}}]}"#;
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                body.len(),
+                body
+            );
+            socket.write_all(response.as_bytes()).await.unwrap();
+        });
+
+        let client =
+            CloudflareD1Client::with_endpoint(format!("http://{address}/raw"), "test-token", Duration::from_secs(2))
+                .unwrap();
+        let columns = get_columns(&client, "main", "orders").await.unwrap();
+        assert_eq!(columns.len(), 3);
+        assert_eq!(columns[0].extra, None);
+        assert_eq!(columns[1].extra.as_deref(), Some("generated always as virtual"));
+        assert_eq!(columns[2].extra.as_deref(), Some("generated always as stored"));
         server.await.unwrap();
     }
 
